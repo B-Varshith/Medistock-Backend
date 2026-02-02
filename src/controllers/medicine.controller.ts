@@ -1,0 +1,237 @@
+import { Request, Response } from 'express';
+import { prisma } from '../config/db';
+import { asyncHandler } from '../utils/asyncHandler';
+import { sendResponse } from '../utils/response';
+import { z } from 'zod';
+import { s3 } from '../config/s3';
+import { PutObjectCommand, GetObjectCommand, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { v4 as uuidv4 } from 'uuid';
+
+// Helper to ensure bucket exists
+const ensureBucketExists = async () => {
+    const bucketName = process.env.AWS_BUCKET_NAME || 'medistock-bills';
+    try {
+        await s3.send(new HeadBucketCommand({ Bucket: bucketName }));
+    } catch (error) {
+        // Bucket doesn't exist, create it
+        console.log(`Bucket ${bucketName} not found. Creating...`);
+        try {
+            await s3.send(new CreateBucketCommand({ Bucket: bucketName }));
+            console.log(`Bucket ${bucketName} created.`);
+        } catch (createError) {
+            console.error('Failed to create bucket:', createError);
+        }
+    }
+};
+
+const medicineSchema = z.object({
+    name: z.string().min(2),
+    batchNumber: z.string(),
+    expiryDate: z.string().transform((str) => new Date(str)),
+    quantity: z.number().int().positive(),
+    purchaseDate: z.string().transform((str) => new Date(str)),
+    supplierId: z.string(),
+    location: z.string().optional(),
+    billUrl: z.string().optional().default(''), // we store key here technically
+});
+
+interface AuthRequest extends Request {
+    user?: any;
+}
+
+export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) => {
+    // Manually parse numeric fields since they come as strings in FormData
+    const rawData = {
+        ...req.body,
+        quantity: parseInt(req.body.quantity),
+        billUrl: undefined, // Will be set after upload
+    };
+
+    const data = medicineSchema.parse(rawData);
+    const userId = req.user.id;
+    let billKey = ''; // Store the Key, not full URL
+
+    if (req.file) {
+        await ensureBucketExists(); // Ensure bucket exists before upload
+
+        const fileContent = req.file.buffer;
+        const fileName = `${uuidv4()}-${req.file.originalname}`;
+        const params = {
+            Bucket: process.env.AWS_BUCKET_NAME || 'medistock-bills',
+            Key: fileName,
+            Body: fileContent,
+            ContentType: req.file.mimetype,
+        };
+
+        const command = new PutObjectCommand(params);
+        await s3.send(command);
+        billKey = fileName; // Save just the filename
+    }
+
+    // Verify supplier belongs to user
+    const supplier = await prisma.supplier.findFirst({
+        where: { id: data.supplierId, userId },
+    });
+
+    if (!supplier) {
+        return sendResponse(res, 400, false, 'Invalid supplier.');
+    }
+
+    const medicine = await prisma.medicine.create({
+        data: {
+            ...data,
+            billUrl: billKey || undefined, // Store key in billUrl field
+            userId,
+        },
+    });
+
+    return sendResponse(res, 201, true, 'Medicine added successfully', medicine);
+});
+
+export const getMedicines = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const userId = req.user.id;
+    const { search } = req.query;
+
+    const whereClause: any = { userId };
+
+    if (search) {
+        whereClause.OR = [
+            { name: { contains: search as string, mode: 'insensitive' } },
+            { location: { contains: search as string, mode: 'insensitive' } },
+            { supplier: { name: { contains: search as string, mode: 'insensitive' } } }
+        ];
+    }
+
+    const medicines = await prisma.medicine.findMany({
+        where: whereClause,
+        include: { supplier: true },
+        orderBy: { expiryDate: 'asc' }
+    });
+
+    // Generate signed URLs for each medicine with a bill
+    const medicinesWithUrls = await Promise.all(medicines.map(async (med) => {
+        if (med.billUrl) {
+            try {
+                const command = new GetObjectCommand({
+                    Bucket: process.env.AWS_BUCKET_NAME || 'medistock-bills',
+                    Key: med.billUrl,
+                });
+                // Generate a signed URL valid for 1 hour
+                const signedUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
+                return { ...med, billUrl: signedUrl };
+            } catch (error) {
+                console.error(`Failed to sign URL for ${med.billUrl}`, error);
+                return med;
+            }
+        }
+        return med;
+    }));
+
+    return sendResponse(res, 200, true, 'Medicines fetched successfully', medicinesWithUrls);
+});
+
+export const getMedicineById = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    if (typeof id !== 'string') {
+        return sendResponse(res, 400, false, 'Invalid ID format');
+    }
+
+    const medicine = await prisma.medicine.findFirst({
+        where: { id, userId },
+        include: { supplier: true }
+    });
+
+    if (!medicine) {
+        return sendResponse(res, 404, false, 'Medicine not found');
+    }
+
+    return sendResponse(res, 200, true, 'Medicine details fetched', medicine);
+});
+
+export const deleteMedicine = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const userId = req.user.id;
+
+    if (typeof id !== 'string') {
+        return sendResponse(res, 400, false, 'Invalid ID format');
+    }
+
+    const medicine = await prisma.medicine.findFirst({
+        where: { id, userId }
+    });
+
+    if (!medicine) {
+        return sendResponse(res, 404, false, 'Medicine not found or access denied');
+    }
+
+    await prisma.medicine.delete({
+        where: { id }
+    });
+
+    return sendResponse(res, 200, true, 'Medicine deleted successfully');
+});
+
+export const updateMedicine = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    const data = medicineSchema.parse(req.body);
+    const userId = req.user.id;
+
+    if (typeof id !== 'string') return sendResponse(res, 400, false, 'Invalid ID format');
+
+    const medicine = await prisma.medicine.findFirst({ where: { id, userId } });
+    if (!medicine) return sendResponse(res, 404, false, 'Medicine not found');
+
+    const updatedMedicine = await prisma.medicine.update({
+        where: { id },
+        data: { ...data, userId },
+    });
+
+    return sendResponse(res, 200, true, 'Medicine updated successfully', updatedMedicine);
+});
+
+const sellSchema = z.object({
+    items: z.array(z.object({
+        medicineId: z.string(),
+        quantity: z.number().int().positive(),
+        price: z.number().positive(),
+    }))
+});
+
+export const sellMedicines = asyncHandler(async (req: AuthRequest, res: Response) => {
+    const { items } = sellSchema.parse(req.body);
+    const userId = req.user.id;
+    let totalAmount = 0;
+
+    // Use interactive transaction
+    await prisma.$transaction(async (tx) => {
+        for (const item of items) {
+            const medicine = await tx.medicine.findFirst({
+                where: { id: item.medicineId, userId }
+            });
+
+            if (!medicine) throw new Error(`Medicine ${item.medicineId} not found`);
+            if (medicine.quantity < item.quantity) throw new Error(`Insufficient stock for ${medicine.name}`);
+
+            await tx.medicine.update({
+                where: { id: item.medicineId },
+                data: { quantity: medicine.quantity - item.quantity }
+            });
+
+            totalAmount += item.price * item.quantity;
+        }
+
+        await tx.transaction.create({
+            data: {
+                amount: totalAmount,
+                currency: 'INR',
+                status: 'SUCCESS',
+                userId
+            }
+        });
+    });
+
+    return sendResponse(res, 200, true, 'Sale recorded successfully');
+});

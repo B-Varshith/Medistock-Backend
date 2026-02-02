@@ -1,0 +1,76 @@
+datasource db {
+    provider = "postgresql"
+}
+
+generator client {
+    provider = "prisma-client-js"
+}
+
+model User {
+    id            String           @id @default(uuid())
+    name          String
+    email         String           @unique
+    password      String?
+    oauthProvider String?
+    role          Role             @default(OWNER)
+    subscription  SubscriptionPlan @default(FREE)
+    createdAt     DateTime         @default(now())
+
+    medicines    Medicine[]
+    suppliers    Supplier[]
+    transactions Transaction[]
+}
+
+model Medicine {
+    id           String   @id @default(uuid())
+    name         String
+    batchNumber  String
+    expiryDate   DateTime
+    quantity     Int
+    purchaseDate DateTime
+    supplierId   String
+    billUrl      String?
+
+    userId   String
+    user     User     @relation(fields: [userId], references: [id])
+    supplier Supplier @relation(fields: [supplierId], references: [id])
+
+    location  String?
+    createdAt DateTime @default(now())
+}
+
+model Supplier {
+    id      String  @id @default(uuid())
+    name    String
+    phone   String?
+    address String?
+
+    userId    String
+    user      User       @relation(fields: [userId], references: [id])
+    medicines Medicine[]
+}
+
+model Transaction {
+    id        String            @id @default(uuid())
+    amount    Int
+    currency  String
+    status    TransactionStatus
+    userId    String
+    createdAt DateTime          @default(now())
+    user      User              @relation(fields: [userId], references: [id])
+}
+
+enum Role {
+    OWNER
+}
+
+enum SubscriptionPlan {
+    FREE
+    PREMIUM
+}
+
+enum TransactionStatus {
+    PENDING
+    SUCCESS
+    FAILED
+}
