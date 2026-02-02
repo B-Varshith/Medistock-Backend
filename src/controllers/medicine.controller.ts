@@ -42,13 +42,34 @@ interface AuthRequest extends Request {
 
 export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) => {
     // Manually parse numeric fields since they come as strings in FormData
+    const rawQuantity = Number(req.body.quantity);
+    if (isNaN(rawQuantity)) {
+        return sendResponse(res, 400, false, 'Invalid quantity format');
+    }
+
     const rawData = {
         ...req.body,
-        quantity: parseInt(req.body.quantity),
+        quantity: rawQuantity,
         billUrl: undefined, // Will be set after upload
     };
 
-    const data = medicineSchema.parse(rawData);
+    const data = medicineSchema.safeParse(rawData);
+
+    if (!data.success) {
+        return sendResponse(res, 400, false, 'Validation Error', (data.error as any).errors);
+    }
+
+    // Validate dates technically valid but need logical check if needed?
+    // safeParse handles invalid date strings by throwing or returning success:false if transform fails. 
+    // But our schema transform might throw. Let's rely on safeParse if we used z.preprocess or similar, 
+    // but here we used transform. transform executes after parse checks? No, transform runs during parse.
+    // If transform throws, custom error map or handle it. 
+    // Actually, `safeParse` catches errors thrown in `transform`? verify.
+    // Zod documentation says transform errors are caught in safeParse. 
+    // So data.success check is enough for date validity if transform fails for invalid dates.
+
+    const validData = data.data;
+
     const userId = req.user.id;
     let billKey = ''; // Store the Key, not full URL
 
@@ -71,7 +92,7 @@ export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) 
 
     // Verify supplier belongs to user
     const supplier = await prisma.supplier.findFirst({
-        where: { id: data.supplierId, userId },
+        where: { id: validData.supplierId, userId },
     });
 
     if (!supplier) {
@@ -80,7 +101,7 @@ export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) 
 
     const medicine = await prisma.medicine.create({
         data: {
-            ...data,
+            ...validData,
             billUrl: billKey || undefined, // Store key in billUrl field
             userId,
         },

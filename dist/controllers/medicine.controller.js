@@ -39,12 +39,28 @@ const medicineSchema = zod_1.z.object({
 });
 exports.addMedicine = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     // Manually parse numeric fields since they come as strings in FormData
+    const rawQuantity = Number(req.body.quantity);
+    if (isNaN(rawQuantity)) {
+        return (0, response_1.sendResponse)(res, 400, false, 'Invalid quantity format');
+    }
     const rawData = {
         ...req.body,
-        quantity: parseInt(req.body.quantity),
+        quantity: rawQuantity,
         billUrl: undefined, // Will be set after upload
     };
-    const data = medicineSchema.parse(rawData);
+    const data = medicineSchema.safeParse(rawData);
+    if (!data.success) {
+        return (0, response_1.sendResponse)(res, 400, false, 'Validation Error', data.error.errors);
+    }
+    // Validate dates technically valid but need logical check if needed?
+    // safeParse handles invalid date strings by throwing or returning success:false if transform fails. 
+    // But our schema transform might throw. Let's rely on safeParse if we used z.preprocess or similar, 
+    // but here we used transform. transform executes after parse checks? No, transform runs during parse.
+    // If transform throws, custom error map or handle it. 
+    // Actually, `safeParse` catches errors thrown in `transform`? verify.
+    // Zod documentation says transform errors are caught in safeParse. 
+    // So data.success check is enough for date validity if transform fails for invalid dates.
+    const validData = data.data;
     const userId = req.user.id;
     let billKey = ''; // Store the Key, not full URL
     if (req.file) {
@@ -63,14 +79,14 @@ exports.addMedicine = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     }
     // Verify supplier belongs to user
     const supplier = await db_1.prisma.supplier.findFirst({
-        where: { id: data.supplierId, userId },
+        where: { id: validData.supplierId, userId },
     });
     if (!supplier) {
         return (0, response_1.sendResponse)(res, 400, false, 'Invalid supplier.');
     }
     const medicine = await db_1.prisma.medicine.create({
         data: {
-            ...data,
+            ...validData,
             billUrl: billKey || undefined, // Store key in billUrl field
             userId,
         },
