@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/db';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendResponse } from '../utils/response';
+import { ApiError } from '../utils/ApiError';
 import { z } from 'zod';
 
 
@@ -45,7 +46,7 @@ export const updateSupplier = asyncHandler(async (req: AuthRequest, res: Respons
     const { name, phone, address } = supplierSchema.parse(req.body);
     const userId = req.user.id;
 
-    if (typeof id !== 'string') return sendResponse(res, 400, false, 'Invalid ID format');
+    if (typeof id !== 'string') throw new ApiError(400, 'Invalid ID format');
 
     const supplier = await prisma.supplier.findFirst({ where: { id, userId } });
     if (!supplier) return sendResponse(res, 404, false, 'Supplier not found');
@@ -62,7 +63,7 @@ export const deleteSupplier = asyncHandler(async (req: AuthRequest, res: Respons
     const { id } = req.params;
     const userId = req.user.id;
 
-    if (typeof id !== 'string') return sendResponse(res, 400, false, 'Invalid ID format');
+    if (typeof id !== 'string') throw new ApiError(400, 'Invalid ID format');
 
     const supplier = await prisma.supplier.findFirst({ where: { id, userId } });
     if (!supplier) return sendResponse(res, 404, false, 'Supplier not found');

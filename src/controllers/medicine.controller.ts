@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/db';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendResponse } from '../utils/response';
+import { ApiError } from '../utils/ApiError';
 import { z } from 'zod';
 import { s3 } from '../config/s3';
 import { PutObjectCommand, GetObjectCommand, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
@@ -44,7 +45,7 @@ export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) 
     // Manually parse numeric fields since they come as strings in FormData
     const rawQuantity = Number(req.body.quantity);
     if (isNaN(rawQuantity)) {
-        return sendResponse(res, 400, false, 'Invalid quantity format');
+        throw new ApiError(400, 'Invalid quantity format');
     }
 
     const rawData = {
@@ -53,11 +54,7 @@ export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) 
         billUrl: undefined, // Will be set after upload
     };
 
-    const data = medicineSchema.safeParse(rawData);
-
-    if (!data.success) {
-        return sendResponse(res, 400, false, 'Validation Error', (data.error as any).errors);
-    }
+    const validData = medicineSchema.parse(rawData);
 
     // Validate dates technically valid but need logical check if needed?
     // safeParse handles invalid date strings by throwing or returning success:false if transform fails. 
@@ -68,7 +65,6 @@ export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) 
     // Zod documentation says transform errors are caught in safeParse. 
     // So data.success check is enough for date validity if transform fails for invalid dates.
 
-    const validData = data.data;
 
     const userId = req.user.id;
     let billKey = ''; // Store the Key, not full URL
@@ -96,7 +92,7 @@ export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) 
     });
 
     if (!supplier) {
-        return sendResponse(res, 400, false, 'Invalid supplier.');
+        throw new ApiError(400, 'Invalid supplier.');
     }
 
     const medicine = await prisma.medicine.create({
@@ -157,7 +153,7 @@ export const getMedicineById = asyncHandler(async (req: AuthRequest, res: Respon
     const userId = req.user.id;
 
     if (typeof id !== 'string') {
-        return sendResponse(res, 400, false, 'Invalid ID format');
+        throw new ApiError(400, 'Invalid ID format');
     }
 
     const medicine = await prisma.medicine.findFirst({
@@ -166,7 +162,7 @@ export const getMedicineById = asyncHandler(async (req: AuthRequest, res: Respon
     });
 
     if (!medicine) {
-        return sendResponse(res, 404, false, 'Medicine not found');
+        throw new ApiError(404, 'Medicine not found');
     }
 
     return sendResponse(res, 200, true, 'Medicine details fetched', medicine);
@@ -177,7 +173,7 @@ export const deleteMedicine = asyncHandler(async (req: AuthRequest, res: Respons
     const userId = req.user.id;
 
     if (typeof id !== 'string') {
-        return sendResponse(res, 400, false, 'Invalid ID format');
+        throw new ApiError(400, 'Invalid ID format');
     }
 
     const medicine = await prisma.medicine.findFirst({
@@ -185,7 +181,7 @@ export const deleteMedicine = asyncHandler(async (req: AuthRequest, res: Respons
     });
 
     if (!medicine) {
-        return sendResponse(res, 404, false, 'Medicine not found or access denied');
+        throw new ApiError(404, 'Medicine not found or access denied');
     }
 
     await prisma.medicine.delete({
@@ -200,10 +196,10 @@ export const updateMedicine = asyncHandler(async (req: AuthRequest, res: Respons
     const data = medicineSchema.parse(req.body);
     const userId = req.user.id;
 
-    if (typeof id !== 'string') return sendResponse(res, 400, false, 'Invalid ID format');
+    if (typeof id !== 'string') throw new ApiError(400, 'Invalid ID format');
 
     const medicine = await prisma.medicine.findFirst({ where: { id, userId } });
-    if (!medicine) return sendResponse(res, 404, false, 'Medicine not found');
+    if (!medicine) throw new ApiError(404, 'Medicine not found');
 
     const updatedMedicine = await prisma.medicine.update({
         where: { id },
@@ -233,8 +229,8 @@ export const sellMedicines = asyncHandler(async (req: AuthRequest, res: Response
                 where: { id: item.medicineId, userId }
             });
 
-            if (!medicine) throw new Error(`Medicine ${item.medicineId} not found`);
-            if (medicine.quantity < item.quantity) throw new Error(`Insufficient stock for ${medicine.name}`);
+            if (!medicine) throw new ApiError(404, `Medicine ${item.medicineId} not found`);
+            if (medicine.quantity < item.quantity) throw new ApiError(400, `Insufficient stock for ${medicine.name}`);
 
             await tx.medicine.update({
                 where: { id: item.medicineId },

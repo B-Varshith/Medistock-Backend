@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { prisma } from '../config/db';
 import { asyncHandler } from '../utils/asyncHandler';
 import { sendResponse } from '../utils/response';
+import { ApiError } from '../utils/ApiError';
 import { z } from 'zod';
 
 
@@ -24,7 +25,7 @@ export const register = asyncHandler(async (req: Request, res: Response) => {
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
-        return sendResponse(res, 400, false, 'User already exists.');
+        throw new ApiError(400, 'User already exists.');
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -49,12 +50,12 @@ export const login = asyncHandler(async (req: Request, res: Response) => {
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !user.password) {
-        return sendResponse(res, 400, false, 'Invalid credentials.');
+        throw new ApiError(400, 'Invalid credentials.');
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-        return sendResponse(res, 400, false, 'Invalid credentials.');
+        throw new ApiError(400, 'Invalid credentials.');
     }
 
     const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET || 'secret', {
@@ -68,7 +69,7 @@ export const getMe = asyncHandler(async (req: Request, res: Response) => {
     const userId = (req as any).user?.id;
 
     if (!userId) {
-        return sendResponse(res, 401, false, 'Not authenticated.');
+        throw new ApiError(401, 'Not authenticated.');
     }
 
     const user = await prisma.user.findUnique({
@@ -77,7 +78,7 @@ export const getMe = asyncHandler(async (req: Request, res: Response) => {
     });
 
     if (!user) {
-        return sendResponse(res, 404, false, 'User not found.');
+        throw new ApiError(404, 'User not found.');
     }
 
     return sendResponse(res, 200, true, 'User fetched successfully', { user });
@@ -87,7 +88,7 @@ export const googleCallback = asyncHandler(async (req: Request, res: Response) =
     const user = (req as any).user;
 
     if (!user) {
-        return sendResponse(res, 401, false, 'Authentication failed');
+        throw new ApiError(401, 'Authentication failed');
     }
 
     const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET || 'secret', {
