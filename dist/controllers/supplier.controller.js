@@ -4,6 +4,7 @@ exports.deleteSupplier = exports.updateSupplier = exports.getSuppliers = exports
 const db_1 = require("../config/db");
 const asyncHandler_1 = require("../utils/asyncHandler");
 const response_1 = require("../utils/response");
+const ApiError_1 = require("../utils/ApiError");
 const zod_1 = require("zod");
 const supplierSchema = zod_1.z.object({
     name: zod_1.z.string().min(2),
@@ -35,7 +36,7 @@ exports.updateSupplier = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const { name, phone, address } = supplierSchema.parse(req.body);
     const userId = req.user.id;
     if (typeof id !== 'string')
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid ID format');
+        throw new ApiError_1.ApiError(400, 'Invalid ID format');
     const supplier = await db_1.prisma.supplier.findFirst({ where: { id, userId } });
     if (!supplier)
         return (0, response_1.sendResponse)(res, 404, false, 'Supplier not found');
@@ -49,7 +50,7 @@ exports.deleteSupplier = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
     if (typeof id !== 'string')
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid ID format');
+        throw new ApiError_1.ApiError(400, 'Invalid ID format');
     const supplier = await db_1.prisma.supplier.findFirst({ where: { id, userId } });
     if (!supplier)
         return (0, response_1.sendResponse)(res, 404, false, 'Supplier not found');

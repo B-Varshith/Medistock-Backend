@@ -10,6 +10,8 @@ const auth_middleware_1 = require("../middlewares/auth.middleware");
 const router = (0, express_1.Router)();
 router.post('/register', auth_controller_1.register);
 router.post('/login', auth_controller_1.login);
+router.post('/otp/request', auth_controller_1.requestOtp);
+router.post('/otp/verify', auth_controller_1.verifyOtp);
 router.get('/me', auth_middleware_1.authenticate, auth_controller_1.getMe);
 // Google OAuth
 router.get('/google', passport_1.default.authenticate('google', { scope: ['profile', 'email'] }));

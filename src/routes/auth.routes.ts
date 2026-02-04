@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import passport from 'passport';
-import { register, login, getMe, googleCallback } from '../controllers/auth.controller';
+import { register, login, getMe, googleCallback, requestOtp, verifyOtp } from '../controllers/auth.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 
 const router = Router();
 
 router.post('/register', register);
 router.post('/login', login);
+router.post('/otp/request', requestOtp);
+router.post('/otp/verify', verifyOtp);
 router.get('/me', authenticate, getMe);
 
 // Google OAuth

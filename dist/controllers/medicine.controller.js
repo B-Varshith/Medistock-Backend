@@ -4,29 +4,12 @@ exports.sellMedicines = exports.updateMedicine = exports.deleteMedicine = export
 const db_1 = require("../config/db");
 const asyncHandler_1 = require("../utils/asyncHandler");
 const response_1 = require("../utils/response");
+const ApiError_1 = require("../utils/ApiError");
 const zod_1 = require("zod");
 const s3_1 = require("../config/s3");
 const client_s3_1 = require("@aws-sdk/client-s3");
 const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
 const uuid_1 = require("uuid");
-// Helper to ensure bucket exists
-const ensureBucketExists = async () => {
-    const bucketName = process.env.AWS_BUCKET_NAME || 'medistock-bills';
-    try {
-        await s3_1.s3.send(new client_s3_1.HeadBucketCommand({ Bucket: bucketName }));
-    }
-    catch (error) {
-        // Bucket doesn't exist, create it
-        console.log(`Bucket ${bucketName} not found. Creating...`);
-        try {
-            await s3_1.s3.send(new client_s3_1.CreateBucketCommand({ Bucket: bucketName }));
-            console.log(`Bucket ${bucketName} created.`);
-        }
-        catch (createError) {
-            console.error('Failed to create bucket:', createError);
-        }
-    }
-};
 const medicineSchema = zod_1.z.object({
     name: zod_1.z.string().min(2),
     batchNumber: zod_1.z.string(),
@@ -41,17 +24,14 @@ exports.addMedicine = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     // Manually parse numeric fields since they come as strings in FormData
     const rawQuantity = Number(req.body.quantity);
     if (isNaN(rawQuantity)) {
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid quantity format');
+        throw new ApiError_1.ApiError(400, 'Invalid quantity format');
     }
     const rawData = {
         ...req.body,
         quantity: rawQuantity,
         billUrl: undefined, // Will be set after upload
     };
-    const data = medicineSchema.safeParse(rawData);
-    if (!data.success) {
-        return (0, response_1.sendResponse)(res, 400, false, 'Validation Error', data.error.errors);
-    }
+    const validData = medicineSchema.parse(rawData);
     // Validate dates technically valid but need logical check if needed?
     // safeParse handles invalid date strings by throwing or returning success:false if transform fails. 
     // But our schema transform might throw. Let's rely on safeParse if we used z.preprocess or similar, 
@@ -60,11 +40,9 @@ exports.addMedicine = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     // Actually, `safeParse` catches errors thrown in `transform`? verify.
     // Zod documentation says transform errors are caught in safeParse. 
     // So data.success check is enough for date validity if transform fails for invalid dates.
-    const validData = data.data;
     const userId = req.user.id;
     let billKey = ''; // Store the Key, not full URL
     if (req.file) {
-        await ensureBucketExists(); // Ensure bucket exists before upload
         const fileContent = req.file.buffer;
         const fileName = `${(0, uuid_1.v4)()}-${req.file.originalname}`;
         const params = {
@@ -82,7 +60,7 @@ exports.addMedicine = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
         where: { id: validData.supplierId, userId },
     });
     if (!supplier) {
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid supplier.');
+        throw new ApiError_1.ApiError(400, 'Invalid supplier.');
     }
     const medicine = await db_1.prisma.medicine.create({
         data: {
@@ -134,14 +112,14 @@ exports.getMedicineById = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
     if (typeof id !== 'string') {
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid ID format');
+        throw new ApiError_1.ApiError(400, 'Invalid ID format');
     }
     const medicine = await db_1.prisma.medicine.findFirst({
         where: { id, userId },
         include: { supplier: true }
     });
     if (!medicine) {
-        return (0, response_1.sendResponse)(res, 404, false, 'Medicine not found');
+        throw new ApiError_1.ApiError(404, 'Medicine not found');
     }
     return (0, response_1.sendResponse)(res, 200, true, 'Medicine details fetched', medicine);
 });
@@ -149,13 +127,13 @@ exports.deleteMedicine = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const { id } = req.params;
     const userId = req.user.id;
     if (typeof id !== 'string') {
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid ID format');
+        throw new ApiError_1.ApiError(400, 'Invalid ID format');
     }
     const medicine = await db_1.prisma.medicine.findFirst({
         where: { id, userId }
     });
     if (!medicine) {
-        return (0, response_1.sendResponse)(res, 404, false, 'Medicine not found or access denied');
+        throw new ApiError_1.ApiError(404, 'Medicine not found or access denied');
     }
     await db_1.prisma.medicine.delete({
         where: { id }
@@ -167,10 +145,10 @@ exports.updateMedicine = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
     const data = medicineSchema.parse(req.body);
     const userId = req.user.id;
     if (typeof id !== 'string')
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid ID format');
+        throw new ApiError_1.ApiError(400, 'Invalid ID format');
     const medicine = await db_1.prisma.medicine.findFirst({ where: { id, userId } });
     if (!medicine)
-        return (0, response_1.sendResponse)(res, 404, false, 'Medicine not found');
+        throw new ApiError_1.ApiError(404, 'Medicine not found');
     const updatedMedicine = await db_1.prisma.medicine.update({
         where: { id },
         data: { ...data, userId },
@@ -195,9 +173,9 @@ exports.sellMedicines = (0, asyncHandler_1.asyncHandler)(async (req, res) => {
                 where: { id: item.medicineId, userId }
             });
             if (!medicine)
-                throw new Error(`Medicine ${item.medicineId} not found`);
+                throw new ApiError_1.ApiError(404, `Medicine ${item.medicineId} not found`);
             if (medicine.quantity < item.quantity)
-                throw new Error(`Insufficient stock for ${medicine.name}`);
+                throw new ApiError_1.ApiError(400, `Insufficient stock for ${medicine.name}`);
             await tx.medicine.update({
                 where: { id: item.medicineId },
                 data: { quantity: medicine.quantity - item.quantity }

@@ -12,6 +12,8 @@ model User {
     email         String           @unique
     password      String?
     oauthProvider String?
+    otp           String?
+    otpExpiry     DateTime?
     role          Role             @default(OWNER)
     subscription  SubscriptionPlan @default(FREE)
     createdAt     DateTime         @default(now())

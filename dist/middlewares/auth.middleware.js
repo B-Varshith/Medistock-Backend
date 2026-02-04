@@ -11,13 +11,8 @@ const authenticate = (req, res, next) => {
     if (!token) {
         return (0, response_1.sendResponse)(res, 401, false, 'Access denied. No token provided.');
     }
-    try {
-        const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET || 'secret');
-        req.user = decoded;
-        next();
-    }
-    catch (error) {
-        return (0, response_1.sendResponse)(res, 400, false, 'Invalid token.');
-    }
+    const decoded = jsonwebtoken_1.default.verify(token, process.env.JWT_SECRET || 'secret');
+    req.user = decoded;
+    next();
 };
 exports.authenticate = authenticate;

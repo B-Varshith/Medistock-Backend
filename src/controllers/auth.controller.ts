@@ -6,6 +6,7 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { sendResponse } from '../utils/response';
 import { ApiError } from '../utils/ApiError';
 import { z } from 'zod';
+import { sendEmail } from '../utils/email.service';
 
 
 
@@ -97,4 +98,81 @@ export const googleCallback = asyncHandler(async (req: Request, res: Response) =
 
     // Redirect to frontend with token
     res.redirect(`http://localhost:5173/oauth/callback?token=${token}`);
+});
+
+export const requestOtp = asyncHandler(async (req: Request, res: Response) => {
+    const { email } = req.body;
+
+    if (!email) {
+        throw new ApiError(400, 'Email is required');
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+        throw new ApiError(404, 'User not found');
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpExpiry = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+
+    // Hash OTP before saving
+    const hashedOtp = await bcrypt.hash(otp, 10);
+
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            otp: hashedOtp,
+            otpExpiry
+        }
+    });
+
+    try {
+        await sendEmail(email, 'Your Login OTP', `Your OTP for login is: ${otp}. It expires in 10 minutes.`);
+    } catch (error) {
+        throw new ApiError(500, 'Failed to send OTP email');
+    }
+
+    return sendResponse(res, 200, true, 'OTP sent successfully');
+});
+
+export const verifyOtp = asyncHandler(async (req: Request, res: Response) => {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+        throw new ApiError(400, 'Email and OTP are required');
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+        throw new ApiError(404, 'User not found');
+    }
+
+    if (!user.otp || !user.otpExpiry) {
+        throw new ApiError(400, 'No OTP requested');
+    }
+
+    if (new Date() > user.otpExpiry) {
+        throw new ApiError(400, 'OTP expired');
+    }
+
+    const isMatch = await bcrypt.compare(otp, user.otp);
+    if (!isMatch) {
+        throw new ApiError(400, 'Invalid OTP');
+    }
+
+    // Clear OTP after successful login
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            otp: null,
+            otpExpiry: null
+        }
+    });
+
+    const token = jwt.sign({ id: user.id, role: user.role }, process.env.JWT_SECRET || 'secret', {
+        expiresIn: '1d',
+    });
+
+    return sendResponse(res, 200, true, 'Login successful', { token, user: { id: user.id, name: user.name, email: user.email, role: user.role } });
 });
