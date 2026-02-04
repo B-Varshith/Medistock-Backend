@@ -5,26 +5,11 @@ import { sendResponse } from '../utils/response';
 import { ApiError } from '../utils/ApiError';
 import { z } from 'zod';
 import { s3 } from '../config/s3';
-import { PutObjectCommand, GetObjectCommand, CreateBucketCommand, HeadBucketCommand } from '@aws-sdk/client-s3';
+import { PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { v4 as uuidv4 } from 'uuid';
 
-// Helper to ensure bucket exists
-const ensureBucketExists = async () => {
-    const bucketName = process.env.AWS_BUCKET_NAME || 'medistock-bills';
-    try {
-        await s3.send(new HeadBucketCommand({ Bucket: bucketName }));
-    } catch (error) {
-        // Bucket doesn't exist, create it
-        console.log(`Bucket ${bucketName} not found. Creating...`);
-        try {
-            await s3.send(new CreateBucketCommand({ Bucket: bucketName }));
-            console.log(`Bucket ${bucketName} created.`);
-        } catch (createError) {
-            console.error('Failed to create bucket:', createError);
-        }
-    }
-};
+
 
 const medicineSchema = z.object({
     name: z.string().min(2),
@@ -70,7 +55,7 @@ export const addMedicine = asyncHandler(async (req: AuthRequest, res: Response) 
     let billKey = ''; // Store the Key, not full URL
 
     if (req.file) {
-        await ensureBucketExists(); // Ensure bucket exists before upload
+
 
         const fileContent = req.file.buffer;
         const fileName = `${uuidv4()}-${req.file.originalname}`;

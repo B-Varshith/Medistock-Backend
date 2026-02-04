@@ -13,11 +13,7 @@ export const authenticate = (req: AuthRequest, res: Response, next: NextFunction
         return sendResponse(res, 401, false, 'Access denied. No token provided.');
     }
 
-    try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-        req.user = decoded;
-        next();
-    } catch (error) {
-        return sendResponse(res, 400, false, 'Invalid token.');
-    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    req.user = decoded;
+    next();
 };
